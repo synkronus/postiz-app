@@ -17,6 +17,7 @@ import { TemporalRegisterMissingSearchAttributesModule } from '@gitroom/nestjs-l
 import { InfiniteWorkflowRegisterModule } from '@gitroom/nestjs-libraries/temporal/infinite.workflow.register';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
+import { KonversifySsoModule } from '@gitroom/backend/services/konversify-sso/konversify.sso.module';
 
 @Global()
 @Module({
@@ -24,6 +25,7 @@ import { ioRedis } from '@gitroom/nestjs-libraries/redis/redis.service';
     SentryModule.forRoot(),
     DatabaseModule,
     ApiModule,
+    KonversifySsoModule,
     PublicApiModule,
     AgentModule,
     ThirdPartyModule,
