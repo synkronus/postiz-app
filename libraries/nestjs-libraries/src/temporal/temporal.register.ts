@@ -24,14 +24,24 @@ export class TemporalRegister implements OnModuleInit {
     );
 
     if (missingAttributes.length > 0) {
-      await connection.operatorService.addSearchAttributes({
-        namespace: process.env.TEMPORAL_NAMESPACE || 'default',
-        searchAttributes: missingAttributes.reduce((all, current) => {
-          // @ts-ignore
-          all[current] = 1;
-          return all;
-        }, {}),
-      });
+      try {
+        await connection.operatorService.addSearchAttributes({
+          namespace: process.env.TEMPORAL_NAMESPACE || 'default',
+          searchAttributes: missingAttributes.reduce((all, current) => {
+            // @ts-ignore
+            all[current] = 1;
+            return all;
+          }, {}),
+        });
+      } catch (error) {
+        // Self-hosted servers using the postgres12 visibility store cap
+        // Text search attributes below what we register; missing attributes
+        // only narrow workflow list queries, so boot must not fail here.
+        console.warn(
+          'Failed to register Temporal search attributes (non-fatal):',
+          error,
+        );
+      }
     }
   }
 }
