@@ -107,14 +107,25 @@ class MemoryDb {
   orgs: Org[] = [];
   users: User[] = [];
   memberships: Membership[] = [];
+  // simulates a concurrent first login: the next lookup misses an
+  // organization that already exists
+  skipNextOrgFind = false;
 
   repository() {
     const db = this;
     const models = {
       model: {
         organization: {
-          findFirst: async ({ where }: any) =>
-            db.orgs.find((o) => o.name === where.name && !o.deletedAt) ?? null,
+          findFirst: async ({ where }: any) => {
+            if (db.skipNextOrgFind) {
+              db.skipNextOrgFind = false;
+              return null;
+            }
+            return (
+              db.orgs.find((o) => o.name === where.name && !o.deletedAt) ??
+              null
+            );
+          },
           create: async ({ data }: any) => {
             const org: Org = {
               id: `org-${++keyCounter}`,
@@ -123,6 +134,11 @@ class MemoryDb {
             };
             db.orgs.push(org);
             return org;
+          },
+          delete: async ({ where }: any) => {
+            const index = db.orgs.findIndex((o) => o.id === where.id);
+            db.orgs.splice(index, 1);
+            return db.orgs[index] ?? db.orgs[0] ?? null;
           },
         },
         user: {
@@ -226,6 +242,29 @@ describe('KonversifySsoService', () => {
     expect(db.memberships[0].role).toBe('SUPERADMIN');
   });
 
+  it('a concurrent first login keeps the older organization as canonical', async () => {
+    const db = new MemoryDb();
+    const preExisting: Org = {
+      id: 'org-preexisting',
+      name: konversifyOrgName('ws_123'),
+      deletedAt: null,
+    };
+    db.orgs.push(preExisting);
+    db.skipNextOrgFind = true; // both first logins missed each other's create
+
+    const service = makeService(db);
+    const session = await service.loginWithToken(
+      await mintToken(validClaims()),
+      'ip',
+      'ua'
+    );
+
+    expect(db.orgs).toHaveLength(1);
+    expect(db.orgs[0].id).toBe('org-preexisting');
+    expect(session.organizationId).toBe('org-preexisting');
+    expect(db.memberships[0].organizationId).toBe('org-preexisting');
+  });
+
   it('a token with the wrong audience is rejected with 401', async () => {
     const service = makeService(new MemoryDb());
     const token = await mintToken(validClaims(), { audience: 'some-other-tool' });
@@ -274,16 +313,33 @@ describe('KonversifySsoService', () => {
     );
   });
 
-  it('a half-configured deployment (missing issuer/audience env) rejects tokens', async () => {
+  it('a half-configured deployment is unavailable (503), never silently accepting', async () => {
     const service = makeService(new MemoryDb());
     const issuer = process.env.KONVERSIFY_SSO_ISSUER;
     delete process.env.KONVERSIFY_SSO_ISSUER;
 
-    await expect(
-      service.loginWithToken(await mintToken(validClaims()), 'ip', 'ua')
-    ).rejects.toMatchObject({ status: 401 });
+    try {
+      await expect(
+        service.loginWithToken(await mintToken(validClaims()), 'ip', 'ua')
+      ).rejects.toMatchObject({ status: 503 });
+    } finally {
+      process.env.KONVERSIFY_SSO_ISSUER = issuer!;
+    }
+  });
 
-    process.env.KONVERSIFY_SSO_ISSUER = issuer!;
+  it('an unreachable JWKS endpoint is a server fault (503), not an invalid token (401)', async () => {
+    const service = makeService(new MemoryDb());
+    const jwksUrl = process.env.KONVERSIFY_JWKS_URL;
+    // nothing listens on this port
+    process.env.KONVERSIFY_JWKS_URL = 'http://127.0.0.1:9/jwks.json';
+
+    try {
+      await expect(
+        service.loginWithToken(await mintToken(validClaims()), 'ip', 'ua')
+      ).rejects.toMatchObject({ status: 503 });
+    } finally {
+      process.env.KONVERSIFY_JWKS_URL = jwksUrl;
+    }
   });
 });
 
