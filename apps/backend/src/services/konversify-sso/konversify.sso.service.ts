@@ -1,4 +1,9 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { User } from '@prisma/client';
 import { AuthService } from '@gitroom/helpers/auth/auth.service';
@@ -58,7 +63,10 @@ export class KonversifySsoService {
     // jose skips claim checks for undefined options — a half-configured
     // deployment must reject tokens, not accept them unchecked
     if (!jwksUrl || !issuer || !audience) {
-      throw new UnauthorizedException();
+      new Logger(KonversifySsoService.name).warn(
+        'konversify sso rejected: not_configured'
+      );
+      throw new ServiceUnavailableException('Konversify SSO is unavailable');
     }
 
     try {
@@ -80,6 +88,17 @@ export class KonversifySsoService {
 
       return claims;
     } catch (err) {
+      // one classified warn line so a JWKS outage or key-rotation gap is
+      // distinguishable from token noise in the logs; only the error class
+      // is logged — jose messages embed received claim values
+      const reason = rejectReason(err);
+      new Logger(KonversifySsoService.name).warn(
+        `konversify sso rejected: ${reason}`
+      );
+
+      if (reason === 'jwks_unreachable') {
+        throw new ServiceUnavailableException('Konversify SSO is unavailable');
+      }
       throw new UnauthorizedException();
     }
   }
@@ -93,3 +112,37 @@ export class KonversifySsoService {
     return jwks;
   }
 }
+
+const errorCode = (err: unknown): string | undefined => {
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === 'string' ? code : undefined;
+};
+
+const rejectReason = (err: unknown): string => {
+  const code = errorCode(err);
+
+  // jose network failures and a malformed JWKS response are deployment
+  // faults, not bad tokens
+  if (code === 'ERR_JWKS_TIMEOUT' || code === 'ERR_JWKS_INVALID') {
+    return 'jwks_unreachable';
+  }
+  // fetch transport errors (undici sets ECONNREFUSED / ENOTFOUND / UND_ERR_*)
+  if (
+    err instanceof TypeError ||
+    (code && !code.startsWith('ERR_J')) ||
+    err instanceof URIError
+  ) {
+    return 'jwks_unreachable';
+  }
+  if (code === 'ERR_JWKS_NO_MATCHING_KEY') {
+    return 'no_matching_key';
+  }
+  if (code === 'ERR_JWT_EXPIRED') {
+    return 'expired';
+  }
+  if (code) {
+    return 'invalid_token';
+  }
+  // plain Error — the missing-claims guard
+  return 'invalid_token';
+};

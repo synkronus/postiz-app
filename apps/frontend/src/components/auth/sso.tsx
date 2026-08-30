@@ -2,16 +2,20 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
+import { useVariables } from '@gitroom/react/helpers/variable.context';
+import { setCookie } from '@gitroom/frontend/components/layout/layout.context';
 import { useT } from '@gitroom/react/translation/get.transation.service.client';
 
 // Konversify SSO handoff: the shell opens /sso#t=<jwt> and this page exchanges
 // the token for a Postiz session. The token lives in the URL fragment only and
 // is stripped from the URL/history as soon as it is read — it is never placed
-// in a query string, a request header log, or the console.
+// in a query string, a log, or the console.
+//
+// The request deliberately bypasses useFetch: its global afterRequest hook
+// redirects to "/" on any 401, which would swallow the failure screen below.
 export function Sso() {
   const t = useT();
-  const fetchData = useFetch();
+  const { backendUrl, isSecured } = useVariables();
   const [failed, setFailed] = useState(false);
   const started = useRef(false);
 
@@ -33,12 +37,29 @@ export function Sso() {
 
       window.history.replaceState(null, '', window.location.pathname);
 
-      const request = await fetchData('/integrations/konversify-sso', {
+      const request = await fetch(`${backendUrl}/integrations/konversify-sso`, {
         method: 'POST',
+        ...(isSecured ? { credentials: 'include' as const } : {}),
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
         body: JSON.stringify({ token }),
       });
 
       if (request.status === 200) {
+        // unsecured deployments expose the session via headers instead of a
+        // cookie readable across origins (same fallback as the login page)
+        if (!isSecured) {
+          const auth = request.headers.get('auth');
+          const showorg = request.headers.get('showorg');
+          if (auth) {
+            setCookie('auth', auth, 365);
+          }
+          if (showorg) {
+            setCookie('showorg', showorg, 365);
+          }
+        }
         window.location.replace('/');
         return;
       }
@@ -46,8 +67,11 @@ export function Sso() {
       setFailed(true);
     };
 
-    exchangeToken();
-  }, [fetchData]);
+    exchangeToken().catch((err) => {
+      console.error('sso token exchange failed', err);
+      setFailed(true);
+    });
+  }, [backendUrl, isSecured]);
 
   return (
     <div className="bg-[#0E0E0E] flex flex-col items-center justify-center min-h-screen w-screen text-white p-[24px]">

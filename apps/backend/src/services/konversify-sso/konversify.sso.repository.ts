@@ -30,7 +30,7 @@ export class KonversifySsoRepository {
       return existing;
     }
 
-    return this._organization.model.organization.create({
+    const created = await this._organization.model.organization.create({
       data: {
         name,
         apiKey: AuthService.fixedEncryption(makeId(20)),
@@ -38,6 +38,23 @@ export class KonversifySsoRepository {
         isTrailing: true,
       },
     });
+
+    // two concurrent first logins for the same workspace can both pass the
+    // findFirst above (name is not a unique column): the oldest org is the
+    // canonical one, so drop the loser. Nothing can reference it yet —
+    // memberships are created after this resolves.
+    const canonical = await this._organization.model.organization.findFirst({
+      where: { name, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (canonical.id !== created.id) {
+      await this._organization.model.organization.delete({
+        where: { id: created.id },
+      });
+      return canonical;
+    }
+
+    return created;
   }
 
   async ensureUser(claims: KonversifySsoClaims, ip: string, userAgent: string) {
@@ -72,6 +89,8 @@ export class KonversifySsoRepository {
         providerName: 'LOCAL',
         deletedAt: null,
       },
+      // email is not a unique column either: oldest row wins deterministically
+      orderBy: { createdAt: 'asc' },
     });
   }
 
