@@ -94,9 +94,17 @@ export class KonversifySsoRepository {
     });
   }
 
-  // SUPERADMIN is Postiz's owner-grade role (the role createOrgAndUser gives
-  // the founding user); every Konversify workspace member arrives as its owner.
-  async ensureMembership(userId: string, organizationId: string) {
+  // SUPERADMIN is Postiz's owner-grade role; ADMIN is the workspace-member
+  // grade. The shell mints the token with the member's role in the target
+  // workspace ("owner" | "agent"), so only actual workspace owners get
+  // org-destructive powers in Postiz.
+  async ensureMembership(
+    userId: string,
+    organizationId: string,
+    shellRole: string,
+  ) {
+    const role =
+      shellRole.toLowerCase() === 'owner' ? Role.SUPERADMIN : Role.ADMIN
     return this._userOrg.model.userOrganization.upsert({
       where: {
         userId_organizationId: {
@@ -105,13 +113,13 @@ export class KonversifySsoRepository {
         },
       },
       update: {
-        role: Role.SUPERADMIN,
+        role,
         disabled: false,
       },
       create: {
         userId,
         organizationId,
-        role: Role.SUPERADMIN,
+        role,
       },
     });
   }

@@ -45,7 +45,11 @@ export class KonversifySsoService {
       this._konversifySsoRepository.ensureOrganization(claims.workspaceId),
     ]);
 
-    await this._konversifySsoRepository.ensureMembership(user.id, organization.id);
+    await this._konversifySsoRepository.ensureMembership(
+      user.id,
+      organization.id,
+      claims.role,
+    );
 
     return { jwt: this.sessionJWT(user), organizationId: organization.id };
   }

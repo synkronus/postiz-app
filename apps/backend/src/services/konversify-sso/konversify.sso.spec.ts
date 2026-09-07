@@ -82,7 +82,7 @@ const validClaims = () => ({
   sub: 'cx-user-1',
   email: 'owner@konversify.app',
   workspaceId: 'ws_123',
-  role: 'OWNER',
+  role: 'owner',
 });
 
 // ---- in-memory stand-in for the prisma models the repository touches ----
@@ -240,6 +240,20 @@ describe('KonversifySsoService', () => {
 
     expect(db.memberships[0].disabled).toBe(false);
     expect(db.memberships[0].role).toBe('SUPERADMIN');
+  });
+
+  it('maps a non-owner shell role to ADMIN, never SUPERADMIN', async () => {
+    const db = new MemoryDb();
+    const service = makeService(db);
+
+    await service.loginWithToken(
+      await mintToken({ ...validClaims(), role: 'agent' }),
+      'ip',
+      'ua',
+    );
+
+    expect(db.memberships).toHaveLength(1);
+    expect(db.memberships[0].role).toBe('ADMIN');
   });
 
   it('a concurrent first login keeps the older organization as canonical', async () => {
